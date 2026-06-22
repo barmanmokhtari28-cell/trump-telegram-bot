@@ -14,7 +14,7 @@ from playwright.sync_api import sync_playwright
 RSS_URL = "https://www.trumpstruth.org/feed"
 SENT_POSTS_FILE = "sent_posts.txt"
 
-# Type your channel's public username here (include the @ symbol):
+# Your exact Telegram channel promotional username:
 CHANNEL_USERNAME = "🤖 @secretollah" 
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -103,7 +103,6 @@ def send_telegram_video(video_path):
         return True
 
 def capture_screenshot(post_id, output_path):
-    # Route to the archive page which bypasses Cloudflare Turnstile entirely
     archive_url = f"https://trumpstruth.org/statuses/{post_id}"
     print(f"Navigating to clean archive URL: {archive_url}")
     
@@ -120,11 +119,8 @@ def capture_screenshot(post_id, output_path):
         
         try:
             page.goto(archive_url, wait_until="networkidle", timeout=30000)
-            # Give profile images and media assets time to load completely
             page.wait_for_timeout(4000)
             
-            # Crop the screenshot directly around the main status card block
-            # This contains Donald Trump's profile image, name, and verification checkmark
             selectors = [".detailed-status", "article", ".status", "main"]
             element = None
             for sel in selectors:
@@ -183,11 +179,22 @@ def main():
         escaped_translation = html.escape(translated_text)
         escaped_username = html.escape(CHANNEL_USERNAME)
         
-        caption = f"🇺🇸 <b>ترامپ:</b>\n<blockquote>{escaped_translation}</blockquote>\n\n📢 {escaped_username}"
+        # Unicode Right-to-Left Mark (RLM)
+        RLM = "\u200f"
+        
+        # ==========================================
+        # RIGHT-TO-LEFT ALIGNED CAPTION WITH EMOJIS
+        # ==========================================
+        # Prepending RLM to each line forces Persian text direction 
+        # even if the line starts with non-Persian symbols.
+        caption = (
+            f"{RLM}🇺🇸 <b>دونــالـــد تـرامــپِ شـــیردل:</b>\n"
+            f"<blockquote>{RLM}{escaped_translation}</blockquote>\n\n"
+            f"{RLM}{escaped_username}"
+        )
+        # ==========================================
         
         screenshot_path = f"screenshot_{post_id}.png"
-        
-        # Pulls the screenshot from the clean archive site
         capture_screenshot(post_id, screenshot_path)
 
         success = send_telegram_photo(screenshot_path, caption)
