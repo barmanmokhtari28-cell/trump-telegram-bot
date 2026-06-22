@@ -7,11 +7,18 @@ from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator
 from playwright.sync_api import sync_playwright
 
-# Constants
+# ==========================================
+# CONFIGURATION SETTINGS
+# ==========================================
 RSS_URL = "https://www.trumpstruth.org/feed"
 SENT_POSTS_FILE = "sent_posts.txt"
+
+# Type your channel's public username here (include the @ symbol):
+CHANNEL_USERNAME = "@YourChannelUsername" 
+
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+# ==========================================
 
 def get_sent_posts():
     if not os.path.exists(SENT_POSTS_FILE):
@@ -91,12 +98,10 @@ def send_telegram_video(video_path):
         return True
 
 def capture_screenshot(post_id, output_path):
-    # Direct official Truth Social post URL
     official_url = f"https://truthsocial.com/@realDonaldTrump/posts/{post_id}"
     print(f"Navigating to official Truth Social URL: {official_url}")
     
     with sync_playwright() as p:
-        # Launch browser mimicking normal desktop usage
         browser = p.chromium.launch(
             headless=True,
             args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
@@ -106,15 +111,13 @@ def capture_screenshot(post_id, output_path):
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         page = context.new_page()
-        # Circumvent basic bot-detection scripts
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
         try:
             page.goto(official_url, wait_until="load", timeout=30000)
-            # Give the dynamic content and images some time to render
             page.wait_for_timeout(4000)
             
-            # Hide the dynamic banners demanding login/sign-up which can cover the post
+            # Hide the register overlays and modals
             page.add_style_tag(content="""
                 div[role="dialog"], 
                 div[class*="banner"], 
@@ -128,7 +131,6 @@ def capture_screenshot(post_id, output_path):
             """)
             page.wait_for_timeout(1000)
             
-            # Target the post card block containing his profile photo and post text
             selectors = [".detailed-status", "article", ".status", "main"]
             element = None
             for sel in selectors:
@@ -148,12 +150,10 @@ def capture_screenshot(post_id, output_path):
                 
         except Exception as e:
             print(f"Could not load official page ({e}). Attempting fallback database screenshot...")
-            # Fallback to the archive database if Cloudflare blocks the official page entirely
             fallback_url = f"https://trumpstruth.org/statuses/{post_id}"
             try:
                 page.goto(fallback_url, wait_until="networkidle")
                 page.wait_for_timeout(3000)
-                # Capture the card which has his picture, title, and post content on the archive site
                 page.locator(".detailed-status").first.screenshot(path=output_path)
                 print("Fallback screenshot succeeded.")
             except Exception as e2:
@@ -194,15 +194,20 @@ def main():
         raw_text = clean_html_text(item.description)
         translated_text = translate_to_persian(raw_text)
         
-        # Matches your layout: "ترامپ:" on line 1, Persian translation on line 2
-        caption = f"ترامپ:\n{translated_text}"
+        # ==========================================
+        # CUSTOM CAPTION LAYOUT WITH EMOJIS & USERNAME
+        # ==========================================
+        # This formats the caption as:
+        # 🇺🇸 ترامپ:
+        # [Translation]
+        #
+        # 📢 @YourChannelUsername
+        caption = f"🇺🇸 ترامپ:\n{translated_text}\n\n📢 {CHANNEL_USERNAME}"
+        # ==========================================
         
         screenshot_path = f"screenshot_{post_id}.png"
-        
-        # Capture from the official page instead of the archive site link
         capture_screenshot(post_id, screenshot_path)
 
-        # Upload Screenshot with Caption
         success = send_telegram_photo(screenshot_path, caption)
         if not success:
             print(f"Upload failed. Skipping save track for ID: {post_id}")
@@ -211,7 +216,6 @@ def main():
         if os.path.exists(screenshot_path):
             os.remove(screenshot_path)
 
-        # Find and upload video immediately after if it exists
         video_url = get_video_url_from_page(guid)
         if video_url:
             print(f"Downloading video from {video_url}")
