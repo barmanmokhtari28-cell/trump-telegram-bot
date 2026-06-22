@@ -5,6 +5,7 @@ import html
 import requests
 import feedparser
 from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
 from deep_translator import GoogleTranslator
 from playwright.sync_api import sync_playwright
 
@@ -176,23 +177,52 @@ def main():
         raw_text = clean_html_text(item.description)
         translated_text = translate_to_persian(raw_text)
         
+        # 1. Safe HTML escaping for Telegram formatting
         escaped_translation = html.escape(translated_text)
+        escaped_original = html.escape(raw_text)
         escaped_username = html.escape(CHANNEL_USERNAME)
+        escaped_guid = html.escape(guid)
         
-        # Unicode Right-to-Left Mark (RLM)
+        # 2. Convert Publication Time to Tehran Time (UTC + 3:30)
+        if hasattr(item, 'published_parsed') and item.published_parsed:
+            utc_dt = datetime(*item.published_parsed[:6])
+        else:
+            utc_dt = datetime.utcnow()
+        tehran_dt = utc_dt + timedelta(hours=3, minutes=30)
+        time_string = tehran_dt.strftime("%H:%M")
+        
+        # 3. Dynamic Hashtags
+        lower_raw = raw_text.lower()
+        hashtags = ["#ترامپ", "#آمریکا"]
+        if "ایران" in translated_text or "iran" in lower_raw:
+            hashtags.append("#ایران")
+        if "چین" in translated_text or "china" in lower_raw:
+            hashtags.append("#چین")
+        if "روسیه" in translated_text or "russia" in lower_raw:
+            hashtags.append("#روسیه")
+        if "اسرائیل" in translated_text or "israel" in lower_raw:
+            hashtags.append("#اسرائیل")
+        if "انتخابات" in translated_text or "election" in lower_raw:
+            hashtags.append("#انتخابات")
+        if "فوری" in translated_text or "breaking" in lower_raw:
+            hashtags.append("#فوری")
+            
+        hashtag_string = " ".join(hashtags)
+        
+        # Unicode Right-to-Left Mark (RLM) to ensure correct Persian typography
         RLM = "\u200f"
         
-        # ==========================================
-        # RIGHT-TO-LEFT ALIGNED CAPTION WITH EMOJIS
-        # ==========================================
-        # Prepending RLM to each line forces Persian text direction 
-        # even if the line starts with non-Persian symbols.
+        # 4. Generate the Comprehensive Layout
         caption = (
             f"{RLM}🇺🇸 <b>دونــالـــد تـرامــپِ شـــیردل:</b>\n"
             f"<blockquote>{RLM}{escaped_translation}</blockquote>\n\n"
+            f"{RLM}🇺🇸 <i>متن اصلی (جهت مشاهده ضربه بزنید):</i>\n"
+            f"<tg-spoiler>{escaped_original}</tg-spoiler>\n\n"
+            f"{RLM}⏰ ساعت انتشار (به وقت تهران): {time_string}\n"
+            f"{RLM}🔗 <a href='{escaped_guid}'>مشاهده پست اصلی در Truth Social</a>\n\n"
+            f"{RLM}{hashtag_string}\n"
             f"{RLM}{escaped_username}"
         )
-        # ==========================================
         
         screenshot_path = f"screenshot_{post_id}.png"
         capture_screenshot(post_id, screenshot_path)
@@ -205,6 +235,7 @@ def main():
         if os.path.exists(screenshot_path):
             os.remove(screenshot_path)
 
+        # Download and send video if attached
         video_url = get_video_url_from_page(guid)
         if video_url:
             print(f"Downloading video from {video_url}")
