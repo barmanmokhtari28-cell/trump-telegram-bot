@@ -5,7 +5,6 @@ import html
 import requests
 import feedparser
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
 from deep_translator import GoogleTranslator
 from playwright.sync_api import sync_playwright
 
@@ -15,8 +14,8 @@ from playwright.sync_api import sync_playwright
 RSS_URL = "https://www.trumpstruth.org/feed"
 SENT_POSTS_FILE = "sent_posts.txt"
 
-# Your exact Telegram channel promotional username:
-CHANNEL_USERNAME = "🤖 @secretollah" 
+# Your exact Telegram channel handle
+CHANNEL_USERNAME = "@secretollah" 
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -92,11 +91,15 @@ def send_telegram_photo(photo_path, caption):
             return False
         return True
 
-def send_telegram_video(video_path):
+def send_telegram_video(video_path, caption):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo"
     with open(video_path, "rb") as video:
         files = {"video": video}
-        data = {"chat_id": TELEGRAM_CHAT_ID}
+        data = {
+            "chat_id": TELEGRAM_CHAT_ID, 
+            "caption": caption,
+            "parse_mode": "HTML"
+        }
         res = requests.post(url, files=files, data=data)
         if res.status_code != 200:
             print(f"Failed to send video: {res.text}")
@@ -177,75 +180,59 @@ def main():
         raw_text = clean_html_text(item.description)
         translated_text = translate_to_persian(raw_text)
         
-        # 1. Safe HTML escaping for Telegram formatting
         escaped_translation = html.escape(translated_text)
-        escaped_original = html.escape(raw_text)
         escaped_username = html.escape(CHANNEL_USERNAME)
-        escaped_guid = html.escape(guid)
         
-        # 2. Convert Publication Time to Tehran Time (UTC + 3:30)
-        if hasattr(item, 'published_parsed') and item.published_parsed:
-            utc_dt = datetime(*item.published_parsed[:6])
-        else:
-            utc_dt = datetime.utcnow()
-        tehran_dt = utc_dt + timedelta(hours=3, minutes=30)
-        time_string = tehran_dt.strftime("%H:%M")
-        
-        # 3. Dynamic Hashtags
-        lower_raw = raw_text.lower()
-        hashtags = ["#ترامپ", "#آمریکا"]
-        if "ایران" in translated_text or "iran" in lower_raw:
-            hashtags.append("#ایران")
-        if "چین" in translated_text or "china" in lower_raw:
-            hashtags.append("#چین")
-        if "روسیه" in translated_text or "russia" in lower_raw:
-            hashtags.append("#روسیه")
-        if "اسرائیل" in translated_text or "israel" in lower_raw:
-            hashtags.append("#اسرائیل")
-        if "انتخابات" in translated_text or "election" in lower_raw:
-            hashtags.append("#انتخابات")
-        if "فوری" in translated_text or "breaking" in lower_raw:
-            hashtags.append("#فوری")
-            
-        hashtag_string = " ".join(hashtags)
-        
-        # Unicode Right-to-Left Mark (RLM) to ensure correct Persian typography
         RLM = "\u200f"
         
-        # 4. Generate the Comprehensive Layout
-        caption = (
-            f"{RLM}🇺🇸 <b>دونــالـــد تـرامــپِ شـــیردل:</b>\n"
-            f"<blockquote>{RLM}{escaped_translation}</blockquote>\n\n"
-            f"{RLM}🇺🇸 <i>متن اصلی (جهت مشاهده ضربه بزنید):</i>\n"
-            f"<tg-spoiler>{escaped_original}</tg-spoiler>\n\n"
-            f"{RLM}⏰ ساعت انتشار (به وقت تهران): {time_string}\n"
-            f"{RLM}🔗 <a href='{escaped_guid}'>مشاهده پست اصلی در Truth Social</a>\n\n"
-            f"{RLM}{hashtag_string}\n"
-            f"{RLM}{escaped_username}"
-        )
+        # Format the caption based on whether Trump included text in his post
+        if escaped_translation.strip():
+            caption = (
+                f"{RLM}🇺🇸 <b>دونــالـــد تـرامــپِ شـــیردل:</b>\n"
+                f"<blockquote>{RLM}{escaped_translation}</blockquote>\n\n"
+                f"{RLM}{escaped_username}"
+            )
+        else:
+            caption = (
+                f"{RLM}🇺🇸 <b>دونــالـــد تـرامــپِ شـــیردل:</b>\n\n"
+                f"{RLM}{escaped_username}"
+            )
         
-        screenshot_path = f"screenshot_{post_id}.png"
-        capture_screenshot(post_id, screenshot_path)
-
-        success = send_telegram_photo(screenshot_path, caption)
-        if not success:
-            print(f"Upload failed. Skipping save track for ID: {post_id}")
-            continue
-            
-        if os.path.exists(screenshot_path):
-            os.remove(screenshot_path)
-
-        # Download and send video if attached
+        # Look for video attachments
         video_url = get_video_url_from_page(guid)
+        
+        video_sent = False
         if video_url:
-            print(f"Downloading video from {video_url}")
+            print(f"Found video attachment. Downloading: {video_url}")
             video_file = download_video(video_url)
             if video_file and os.path.exists(video_file):
-                print("Uploading video...")
-                send_telegram_video(video_file)
+                file_size_mb = os.path.getsize(video_file) / (1024 * 1024)
+                print(f"Video file size: {file_size_mb:.2f} MB")
+                
+                # Check 50MB bot upload limit
+                if file_size_mb <= 49.5:
+                    print("Sending original video file...")
+                    success = send_telegram_video(video_file, caption)
+                    if success:
+                        save_sent_post(post_id)
+                        video_sent = True
+                else:
+                    print("Video is too large for Telegram Bot upload. Falling back to screenshot.")
+                
                 os.remove(video_file)
+        
+        # Fallback: If no video existed (or if the video download failed/exceeded 50MB)
+        if not video_sent:
+            print("Capturing post screenshot as post asset...")
+            screenshot_path = f"screenshot_{post_id}.png"
+            capture_screenshot(post_id, screenshot_path)
 
-        save_sent_post(post_id)
+            success = send_telegram_photo(screenshot_path, caption)
+            if success:
+                save_sent_post(post_id)
+                
+            if os.path.exists(screenshot_path):
+                os.remove(screenshot_path)
 
 if __name__ == "__main__":
     main()
