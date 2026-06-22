@@ -90,31 +90,75 @@ def send_telegram_video(video_path):
             return False
         return True
 
-def capture_screenshot(url, output_path):
+def capture_screenshot(post_id, output_path):
+    # Direct official Truth Social post URL
+    official_url = f"https://truthsocial.com/@realDonaldTrump/posts/{post_id}"
+    print(f"Navigating to official Truth Social URL: {official_url}")
+    
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(viewport={"width": 800, "height": 800})
+        # Launch browser mimicking normal desktop usage
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+        )
+        context = browser.new_context(
+            viewport={"width": 800, "height": 900},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         page = context.new_page()
-        page.goto(url, wait_until="networkidle")
+        # Circumvent basic bot-detection scripts
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
-        # Capture the specific post block
-        selectors = [".detailed-status", ".status", "article", ".status-card", "main"]
-        element = None
-        for sel in selectors:
-            try:
-                page.wait_for_selector(sel, timeout=3000)
-                element = page.locator(sel).first
-                if element:
-                    element.screenshot(path=output_path)
-                    print(f"Screenshotted element {sel} successfully.")
-                    break
-            except Exception:
-                continue
-                
-        if not element:
-            print("Capturing fallback viewport screenshot...")
-            page.screenshot(path=output_path)
+        try:
+            page.goto(official_url, wait_until="load", timeout=30000)
+            # Give the dynamic content and images some time to render
+            page.wait_for_timeout(4000)
             
+            # Hide the dynamic banners demanding login/sign-up which can cover the post
+            page.add_style_tag(content="""
+                div[role="dialog"], 
+                div[class*="banner"], 
+                div[class*="promo"], 
+                div[class*="modal"], 
+                .announcement-bar,
+                .register-promo,
+                .sign-up-banner { 
+                    display: none !important; 
+                }
+            """)
+            page.wait_for_timeout(1000)
+            
+            # Target the post card block containing his profile photo and post text
+            selectors = [".detailed-status", "article", ".status", "main"]
+            element = None
+            for sel in selectors:
+                try:
+                    page.wait_for_selector(sel, timeout=3000)
+                    element = page.locator(sel).first
+                    if element:
+                        element.screenshot(path=output_path)
+                        print(f"Screenshotted official element: {sel}")
+                        break
+                except Exception:
+                    continue
+                    
+            if not element:
+                print("Element selectors failed, capturing full page fallback...")
+                page.screenshot(path=output_path)
+                
+        except Exception as e:
+            print(f"Could not load official page ({e}). Attempting fallback database screenshot...")
+            # Fallback to the archive database if Cloudflare blocks the official page entirely
+            fallback_url = f"https://trumpstruth.org/statuses/{post_id}"
+            try:
+                page.goto(fallback_url, wait_until="networkidle")
+                page.wait_for_timeout(3000)
+                # Capture the card which has his picture, title, and post content on the archive site
+                page.locator(".detailed-status").first.screenshot(path=output_path)
+                print("Fallback screenshot succeeded.")
+            except Exception as e2:
+                print(f"Fallback screenshot failed: {e2}")
+                
         browser.close()
 
 def clean_html_text(raw_html):
@@ -154,7 +198,9 @@ def main():
         caption = f"ترامپ:\n{translated_text}"
         
         screenshot_path = f"screenshot_{post_id}.png"
-        capture_screenshot(guid, screenshot_path)
+        
+        # Capture from the official page instead of the archive site link
+        capture_screenshot(post_id, screenshot_path)
 
         # Upload Screenshot with Caption
         success = send_telegram_photo(screenshot_path, caption)
