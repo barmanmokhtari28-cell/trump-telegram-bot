@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import html
 import requests
 import feedparser
 from bs4 import BeautifulSoup
@@ -79,7 +80,11 @@ def send_telegram_photo(photo_path, caption):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
     with open(photo_path, "rb") as photo:
         files = {"photo": photo}
-        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption}
+        data = {
+            "chat_id": TELEGRAM_CHAT_ID, 
+            "caption": caption,
+            "parse_mode": "HTML"
+        }
         res = requests.post(url, files=files, data=data)
         if res.status_code != 200:
             print(f"Failed to send photo: {res.text}")
@@ -98,67 +103,48 @@ def send_telegram_video(video_path):
         return True
 
 def capture_screenshot(post_id, output_path):
-    official_url = f"https://truthsocial.com/@realDonaldTrump/posts/{post_id}"
-    print(f"Navigating to official Truth Social URL: {official_url}")
+    # Route to the archive page which bypasses Cloudflare Turnstile entirely
+    archive_url = f"https://trumpstruth.org/statuses/{post_id}"
+    print(f"Navigating to clean archive URL: {archive_url}")
     
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+            args=["--no-sandbox"]
         )
         context = browser.new_context(
             viewport={"width": 800, "height": 900},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         page = context.new_page()
-        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
         try:
-            page.goto(official_url, wait_until="load", timeout=30000)
+            page.goto(archive_url, wait_until="networkidle", timeout=30000)
+            # Give profile images and media assets time to load completely
             page.wait_for_timeout(4000)
             
-            # Hide the register overlays and modals
-            page.add_style_tag(content="""
-                div[role="dialog"], 
-                div[class*="banner"], 
-                div[class*="promo"], 
-                div[class*="modal"], 
-                .announcement-bar,
-                .register-promo,
-                .sign-up-banner { 
-                    display: none !important; 
-                }
-            """)
-            page.wait_for_timeout(1000)
-            
+            # Crop the screenshot directly around the main status card block
+            # This contains Donald Trump's profile image, name, and verification checkmark
             selectors = [".detailed-status", "article", ".status", "main"]
             element = None
             for sel in selectors:
                 try:
-                    page.wait_for_selector(sel, timeout=3000)
+                    page.wait_for_selector(sel, timeout=4000)
                     element = page.locator(sel).first
                     if element:
                         element.screenshot(path=output_path)
-                        print(f"Screenshotted official element: {sel}")
+                        print(f"Successfully screenshotted post block: {sel}")
                         break
                 except Exception:
                     continue
                     
             if not element:
-                print("Element selectors failed, capturing full page fallback...")
+                print("Target block selector failed, capturing fallback viewport...")
                 page.screenshot(path=output_path)
                 
         except Exception as e:
-            print(f"Could not load official page ({e}). Attempting fallback database screenshot...")
-            fallback_url = f"https://trumpstruth.org/statuses/{post_id}"
-            try:
-                page.goto(fallback_url, wait_until="networkidle")
-                page.wait_for_timeout(3000)
-                page.locator(".detailed-status").first.screenshot(path=output_path)
-                print("Fallback screenshot succeeded.")
-            except Exception as e2:
-                print(f"Fallback screenshot failed: {e2}")
-                
+            print(f"Failed to load or capture screenshot: {e}")
+            
         browser.close()
 
 def clean_html_text(raw_html):
@@ -194,18 +180,14 @@ def main():
         raw_text = clean_html_text(item.description)
         translated_text = translate_to_persian(raw_text)
         
-        # ==========================================
-        # CUSTOM CAPTION LAYOUT WITH EMOJIS & USERNAME
-        # ==========================================
-        # This formats the caption as:
-        # 🇺🇸 ترامپ:
-        # [Translation]
-        #
-        # 📢 @YourChannelUsername
-        caption = f"🇺🇸 ترامپ:\n{translated_text}\n\n📢 {CHANNEL_USERNAME}"
-        # ==========================================
+        escaped_translation = html.escape(translated_text)
+        escaped_username = html.escape(CHANNEL_USERNAME)
+        
+        caption = f"🇺🇸 <b>ترامپ:</b>\n<blockquote>{escaped_translation}</blockquote>\n\n📢 {escaped_username}"
         
         screenshot_path = f"screenshot_{post_id}.png"
+        
+        # Pulls the screenshot from the clean archive site
         capture_screenshot(post_id, screenshot_path)
 
         success = send_telegram_photo(screenshot_path, caption)
