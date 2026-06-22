@@ -14,7 +14,7 @@ RSS_URL = "https://www.trumpstruth.org/feed"
 SENT_POSTS_FILE = "sent_posts.txt"
 
 # Type your channel's public username here (include the @ symbol):
-CHANNEL_USERNAME = "@YourChannelUsername" 
+CHANNEL_USERNAME = "🤖 @secretollah" 
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
