@@ -4,8 +4,11 @@ on:
   push:
     branches: [ main ]
   schedule:
-    # Runs automatically every 5 minutes (the fastest free rate allowed by GitHub)
+    # Backup cron (every 5 minutes, subject to GitHub queue delays)
     - cron: '*/5 * * * *'
+  # Allows instant triggering via external free cron tools
+  repository_dispatch:
+    types: [check_posts]
   workflow_dispatch:
 
 jobs:
