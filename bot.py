@@ -161,7 +161,8 @@ def main():
     sent_posts = get_sent_posts()
     feed = feedparser.parse(RSS_URL)
     
-    items = feed.entries[:5]
+    # scan up to 30 entries to prevent older updates from being skipped
+    items = feed.entries[:30]
     items.reverse()
 
     for item in items:
@@ -185,7 +186,6 @@ def main():
         
         RLM = "\u200f"
         
-        # Format the caption based on whether Trump included text in his post
         if escaped_translation.strip():
             caption = (
                 f"{RLM}🇺🇸 <b>دونــالـــد تـرامــپِ شـــیردل:</b>\n"
@@ -198,7 +198,6 @@ def main():
                 f"{RLM}{escaped_username}"
             )
         
-        # Look for video attachments
         video_url = get_video_url_from_page(guid)
         
         video_sent = False
@@ -209,7 +208,6 @@ def main():
                 file_size_mb = os.path.getsize(video_file) / (1024 * 1024)
                 print(f"Video file size: {file_size_mb:.2f} MB")
                 
-                # Check 50MB bot upload limit
                 if file_size_mb <= 49.5:
                     print("Sending original video file...")
                     success = send_telegram_video(video_file, caption)
@@ -221,7 +219,6 @@ def main():
                 
                 os.remove(video_file)
         
-        # Fallback: If no video existed (or if the video download failed/exceeded 50MB)
         if not video_sent:
             print("Capturing post screenshot as post asset...")
             screenshot_path = f"screenshot_{post_id}.png"
