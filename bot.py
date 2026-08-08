@@ -95,7 +95,7 @@ def build_captions(raw_description):
     escaped_translation = html.escape(translated_text)
     escaped_username = html.escape(CHANNEL_USERNAME)
     RLM = "\u200f"
-    header = f"{RLM}🇺🇸 <b>دونــالـــد تـرامــپِ شـــیردل:</b>"
+    header = f"{RLM}🇺🇸 <b> دونــالـــد تـرامــپِ شـــیردل کـلــهِ سـکســـی:</b>"
     short_caption = f"{header}\n\n{RLM}{escaped_username}"
 
     if not escaped_translation.strip():
