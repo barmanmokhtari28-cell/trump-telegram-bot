@@ -4,16 +4,31 @@ on:
   push:
     branches: [ main ]
   schedule:
-    # Backup cron (every 5 minutes, subject to GitHub queue delays)
+    # Backup cron only — GitHub does NOT guarantee this runs on time
+    # (it can queue/delay well past 5 min under load). The real fix for
+    # speed is the external dispatch trigger described below.
     - cron: '*/5 * * * *'
-  # Allows instant triggering via external free cron tools
   repository_dispatch:
     types: [check_posts]
   workflow_dispatch:
+    inputs:
+      test_mode:
+        description: 'Test mode: ignore sent_posts.txt and grab recent posts instead'
+        type: boolean
+        default: false
+      test_hours:
+        description: 'Test mode: how many hours back to look'
+        type: string
+        default: '5'
+
+concurrency:
+  group: trump-bot-run
+  cancel-in-progress: false
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
 
@@ -25,17 +40,30 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
+        cache: 'pip'
 
-    - name: Install Dependencies
+    - name: Install Python Dependencies
       run: |
         python -m pip install --upgrade pip
         pip install feedparser deep-translator requests beautifulsoup4 playwright
-        playwright install chromium
+
+    - name: Cache Playwright browsers
+      uses: actions/cache@v4
+      id: playwright-cache
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-chromium-${{ runner.os }}
+
+    - name: Install Playwright Chromium
+      if: steps.playwright-cache.outputs.cache-hit != 'true'
+      run: playwright install --with-deps chromium
 
     - name: Execute Bot
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TEST_MODE: ${{ github.event.inputs.test_mode || 'false' }}
+        TEST_HOURS: ${{ github.event.inputs.test_hours || '5' }}
       run: python bot.py
 
     - name: Commit and Push Tracked Posts List
