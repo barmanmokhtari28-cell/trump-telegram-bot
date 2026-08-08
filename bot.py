@@ -22,6 +22,8 @@ TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
 TEST_HOURS = float(os.environ.get("TEST_HOURS", "5"))
 
 SELECTORS = [".detailed-status", "article", ".status", "main"]
+TELEGRAM_CAPTION_LIMIT = 1024
+TELEGRAM_MESSAGE_LIMIT = 4096
 
 
 def get_sent_posts():
@@ -79,22 +81,49 @@ def clean_html_text(raw_html):
     return soup.get_text().strip()
 
 
-def build_caption(raw_description):
+def build_captions(raw_description):
+    """
+    Returns (photo_caption, extra_message_or_None).
+    Telegram rejects any photo/video caption over 1024 characters. Long
+    Trump posts + Persian translation regularly blow past that, so when the
+    full caption is too long we send a short caption on the media itself and
+    put the full translated text in a normal follow-up text message instead
+    (which has a much higher 4096 char limit).
+    """
     raw_text = clean_html_text(raw_description)
     translated_text = translate_to_persian(raw_text)
     escaped_translation = html.escape(translated_text)
     escaped_username = html.escape(CHANNEL_USERNAME)
     RLM = "\u200f"
-    if escaped_translation.strip():
-        return (
-            f"{RLM}🇺🇸 <b>دونــالـــد تـرامــپِ شـــیردل:</b>\n"
-            f"<blockquote>{RLM}{escaped_translation}</blockquote>\n\n"
-            f"{RLM}{escaped_username}"
-        )
-    return (
-        f"{RLM}🇺🇸 <b>دونــالـــد تـرامــپِ شـــیردل:</b>\n\n"
+    header = f"{RLM}🇺🇸 <b>دونــالـــد تـرامــپِ شـــیردل:</b>"
+    short_caption = f"{header}\n\n{RLM}{escaped_username}"
+
+    if not escaped_translation.strip():
+        return short_caption, None
+
+    full_caption = (
+        f"{header}\n"
+        f"<blockquote>{RLM}{escaped_translation}</blockquote>\n\n"
         f"{RLM}{escaped_username}"
     )
+
+    if len(full_caption) <= TELEGRAM_CAPTION_LIMIT:
+        return full_caption, None
+
+    return short_caption, full_caption
+
+
+def send_telegram_message(text):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    # Chunk defensively in case a translation ever exceeds the 4096 message limit.
+    for i in range(0, len(text), TELEGRAM_MESSAGE_LIMIT):
+        chunk = text[i:i + TELEGRAM_MESSAGE_LIMIT]
+        data = {"chat_id": TELEGRAM_CHAT_ID, "text": chunk, "parse_mode": "HTML"}
+        res = requests.post(url, data=data, timeout=30)
+        if res.status_code != 200:
+            print(f"Failed to send message: {res.text}")
+            return False
+    return True
 
 
 def send_telegram_photo(photo_path, caption):
@@ -222,7 +251,7 @@ def main():
                     continue
 
             print(f"Processing post: {post_id}")
-            caption = build_caption(getattr(entry, "description", ""))
+            photo_caption, extra_message = build_captions(getattr(entry, "description", ""))
 
             try:
                 screenshot_path, video_url = capture_post(page, post_id)
@@ -232,8 +261,11 @@ def main():
 
             sent_ok = False
             if screenshot_path and os.path.exists(screenshot_path):
-                sent_ok = send_telegram_photo(screenshot_path, caption)
+                sent_ok = send_telegram_photo(screenshot_path, photo_caption)
                 os.remove(screenshot_path)
+
+            if sent_ok and extra_message:
+                send_telegram_message(extra_message)
 
             if sent_ok and video_url:
                 print(f"Post has a video attachment, downloading: {video_url}")
